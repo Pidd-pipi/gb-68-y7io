@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS irrigation_zones (
     name VARCHAR(100) NOT NULL,
     description TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP
 );
 
 -- 设备类型枚举
@@ -24,7 +25,8 @@ CREATE TABLE IF NOT EXISTS devices (
     last_heartbeat TIMESTAMP,
     config JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP
 );
 
 -- 传感器数据表（时序表）
@@ -62,11 +64,12 @@ CREATE TABLE IF NOT EXISTS irrigation_schedules (
     humidity_threshold DECIMAL(5, 2),
     rain_sensor_id INTEGER REFERENCES devices(id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP
 );
 
 -- 触发方式枚举
-CREATE TYPE trigger_type AS ENUM ('manual', 'timed', 'conditional');
+CREATE TYPE trigger_type AS ENUM ('manual', 'timed', 'conditional', 'emergency');
 CREATE TYPE execution_status AS ENUM ('success', 'failed', 'in_progress');
 
 -- 灌溉执行记录表
@@ -81,12 +84,48 @@ CREATE TABLE IF NOT EXISTS irrigation_logs (
     water_usage DECIMAL(10, 2),
     status execution_status NOT NULL,
     error_message TEXT,
+    remark TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 创建索引
 CREATE INDEX IF NOT EXISTS idx_irrigation_logs_zone_time ON irrigation_logs(zone_id, start_time);
 CREATE INDEX IF NOT EXISTS idx_irrigation_logs_time ON irrigation_logs(start_time);
+
+-- 停灌状态枚举
+CREATE TYPE suspension_status AS ENUM ('active', 'ended');
+
+-- 区域停灌表（同一区域同一时间最多一条 active 记录）
+CREATE TABLE IF NOT EXISTS zone_suspensions (
+    id SERIAL PRIMARY KEY,
+    zone_id INTEGER NOT NULL REFERENCES irrigation_zones(id),
+    reason TEXT NOT NULL,
+    expected_end_time TIMESTAMP NOT NULL,
+    status suspension_status DEFAULT 'active',
+    started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ended_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 同一区域仅允许一条生效中的停灌记录
+CREATE UNIQUE INDEX IF NOT EXISTS idx_zone_suspensions_active ON zone_suspensions(zone_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_zone_suspensions_zone ON zone_suspensions(zone_id);
+
+-- 灌溉跳过记录表（停灌期间被跳过的灌溉）
+CREATE TABLE IF NOT EXISTS irrigation_skip_logs (
+    id BIGSERIAL PRIMARY KEY,
+    zone_id INTEGER NOT NULL REFERENCES irrigation_zones(id),
+    suspension_id INTEGER NOT NULL REFERENCES zone_suspensions(id),
+    schedule_id INTEGER REFERENCES irrigation_schedules(id),
+    trigger_type trigger_type NOT NULL,
+    reason TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 创建索引
+CREATE INDEX IF NOT EXISTS idx_irrigation_skip_logs_zone_time ON irrigation_skip_logs(zone_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_irrigation_skip_logs_suspension ON irrigation_skip_logs(suspension_id);
 
 -- 告警类型枚举
 CREATE TYPE alert_type AS ENUM ('device_offline', 'sensor_abnormal', 'irrigation_failed');

@@ -29,6 +29,24 @@ func (s *IrrigationService) StartIrrigation(scheduleID *uint, zoneID *uint, trig
 	return log, nil
 }
 
+// StartEmergencyIrrigation 紧急启动灌溉（断水恢复、设备漏水等紧急情况），
+// 不受区域停灌限制，需填写书面原因留存，原停灌状态仍按预计时间解除
+func (s *IrrigationService) StartEmergencyIrrigation(zoneID uint, reason string) (*models.IrrigationLog, error) {
+	log := &models.IrrigationLog{
+		ZoneID:      &zoneID,
+		TriggerType: models.TriggerTypeEmergency,
+		StartTime:   time.Now(),
+		Status:      models.ExecutionStatusInProgress,
+		Remark:      &reason,
+	}
+
+	if err := database.DB.Create(log).Error; err != nil {
+		return nil, err
+	}
+
+	return log, nil
+}
+
 func (s *IrrigationService) CompleteIrrigation(logID uint, success bool, waterUsage *float64, errorMsg *string) error {
 	now := time.Now()
 	updates := map[string]interface{}{

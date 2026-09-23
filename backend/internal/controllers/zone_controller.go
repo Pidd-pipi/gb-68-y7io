@@ -11,12 +11,14 @@ import (
 )
 
 type ZoneController struct {
-	zoneService *services.ZoneService
+	zoneService       *services.ZoneService
+	suspensionService *services.SuspensionService
 }
 
 func NewZoneController() *ZoneController {
 	return &ZoneController{
-		zoneService: services.NewZoneService(),
+		zoneService:       services.NewZoneService(),
+		suspensionService: services.NewSuspensionService(),
 	}
 }
 
@@ -37,14 +39,21 @@ func (c *ZoneController) List(ctx *gin.Context) {
 	response.Success(ctx, zones)
 }
 
+// ZoneDetailResponse 区域详情，包含当前停灌状态和最近跳过记录
+type ZoneDetailResponse struct {
+	models.IrrigationZone
+	Suspension  *models.ZoneSuspension     `json:"suspension"`
+	RecentSkips []models.IrrigationSkipLog `json:"recent_skips"`
+}
+
 // GetZone godoc
 // @Summary 获取灌溉区域详情
-// @Description 根据ID获取灌溉区域详情
+// @Description 根据ID获取灌溉区域详情，包含当前停灌状态、原因和最近跳过记录
 // @Tags 灌溉区域
 // @Security ApiKeyAuth
 // @Produce json
 // @Param id path int true "区域ID"
-// @Success 200 {object} models.IrrigationZone
+// @Success 200 {object} controllers.ZoneDetailResponse
 // @Router /api/zones/{id} [get]
 func (c *ZoneController) Get(ctx *gin.Context) {
 	id, _ := strconv.ParseUint(ctx.Param("id"), 10, 32)
@@ -53,7 +62,24 @@ func (c *ZoneController) Get(ctx *gin.Context) {
 		response.NotFound(ctx, "Zone not found")
 		return
 	}
-	response.Success(ctx, zone)
+
+	suspension, err := c.suspensionService.GetActiveSuspension(uint(id))
+	if err != nil {
+		response.InternalServerError(ctx, err.Error())
+		return
+	}
+
+	skips, err := c.suspensionService.ListRecentSkips(uint(id), 10)
+	if err != nil {
+		response.InternalServerError(ctx, err.Error())
+		return
+	}
+
+	response.Success(ctx, ZoneDetailResponse{
+		IrrigationZone: *zone,
+		Suspension:     suspension,
+		RecentSkips:    skips,
+	})
 }
 
 // CreateZone godoc

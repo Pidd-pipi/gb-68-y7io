@@ -87,7 +87,7 @@ type IrrigationSchedule struct {
 	Type              ScheduleType   `json:"type" gorm:"type:schedule_type;not null"`
 	ZoneID            *uint          `json:"zone_id"`
 	Status            ScheduleStatus `json:"status" gorm:"type:schedule_status;default:'inactive'"`
-	StartTime         string         `json:"start_time" gorm:"type:time"`
+	StartTime         *string        `json:"start_time" gorm:"type:time"`
 	Duration          int            `json:"duration"`
 	RepeatMode        RepeatMode     `json:"repeat_mode" gorm:"type:repeat_mode;default:'once'"`
 	RepeatDays        []int          `json:"repeat_days" gorm:"type:integer[]"`
@@ -104,6 +104,7 @@ const (
 	TriggerTypeManual      TriggerType = "manual"
 	TriggerTypeTimed       TriggerType = "timed"
 	TriggerTypeConditional TriggerType = "conditional"
+	TriggerTypeEmergency   TriggerType = "emergency"
 )
 
 type ExecutionStatus string
@@ -125,7 +126,39 @@ type IrrigationLog struct {
 	WaterUsage  *float64        `json:"water_usage" gorm:"type:decimal(10,2)"`
 	Status      ExecutionStatus  `json:"status" gorm:"type:execution_status;not null"`
 	ErrorMessage *string          `json:"error_message" gorm:"type:text"`
+	Remark      *string          `json:"remark" gorm:"type:text"`
 	CreatedAt   time.Time       `json:"created_at"`
+}
+
+type SuspensionStatus string
+
+const (
+	SuspensionStatusActive SuspensionStatus = "active"
+	SuspensionStatusEnded  SuspensionStatus = "ended"
+)
+
+// ZoneSuspension 区域临时停灌记录，同一区域同一时间最多一条 active 记录
+type ZoneSuspension struct {
+	ID              uint             `json:"id" gorm:"primaryKey"`
+	ZoneID          uint             `json:"zone_id" gorm:"not null;index"`
+	Reason          string           `json:"reason" gorm:"type:text;not null"`
+	ExpectedEndTime time.Time        `json:"expected_end_time" gorm:"not null"`
+	Status          SuspensionStatus `json:"status" gorm:"type:suspension_status;default:'active'"`
+	StartedAt       time.Time        `json:"started_at" gorm:"not null"`
+	EndedAt         *time.Time       `json:"ended_at"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+}
+
+// IrrigationSkipLog 停灌期间被跳过的灌溉记录
+type IrrigationSkipLog struct {
+	ID           uint        `json:"id" gorm:"primaryKey"`
+	ZoneID       uint        `json:"zone_id" gorm:"not null;index"`
+	SuspensionID uint        `json:"suspension_id" gorm:"not null;index"`
+	ScheduleID   *uint       `json:"schedule_id"`
+	TriggerType  TriggerType `json:"trigger_type" gorm:"type:trigger_type;not null"`
+	Reason       string      `json:"reason" gorm:"type:text"`
+	CreatedAt    time.Time   `json:"created_at"`
 }
 
 type AlertType string

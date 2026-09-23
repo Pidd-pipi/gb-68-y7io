@@ -16,6 +16,7 @@ type IrrigationScheduler struct {
 	sensorService   *services.SensorService
 	deviceService  *services.DeviceService
 	alertService   *services.AlertService
+	suspensionService *services.SuspensionService
 }
 
 func NewIrrigationScheduler() *IrrigationScheduler {
@@ -25,6 +26,7 @@ func NewIrrigationScheduler() *IrrigationScheduler {
 		sensorService:   services.NewSensorService(),
 		deviceService:  services.NewDeviceService(),
 		alertService:   services.NewAlertService(),
+		suspensionService: services.NewSuspensionService(),
 	}
 }
 
@@ -33,6 +35,7 @@ func (s *IrrigationScheduler) Start() {
 
 	go s.runScheduleCheck()
 	go s.runDeviceHealthCheck()
+	go s.runSuspensionExpiryCheck()
 }
 
 func (s *IrrigationScheduler) runScheduleCheck() {
@@ -61,22 +64,54 @@ func (s *IrrigationScheduler) executeScheduleIfNeeded(schedule models.Irrigation
 
 	if schedule.Type == models.ScheduleTypeTimed {
 		if shouldExecuteTimedSchedule(schedule, now) {
+			if s.skipIfSuspended(schedule, models.TriggerTypeTimed) {
+				return
+			}
 			go s.executeIrrigation(schedule)
 		}
 	} else if schedule.Type == models.ScheduleTypeConditional {
 		if shouldExecuteConditionalSchedule(schedule) {
+			if s.skipIfSuspended(schedule, models.TriggerTypeConditional) {
+				return
+			}
 			go s.executeIrrigation(schedule)
 		}
 	}
 }
 
+// skipIfSuspended 区域停灌中则记录跳过并返回 true
+func (s *IrrigationScheduler) skipIfSuspended(schedule models.IrrigationSchedule, triggerType models.TriggerType) bool {
+	if schedule.ZoneID == nil {
+		return false
+	}
+
+	suspension, err := s.suspensionService.GetActiveSuspension(*schedule.ZoneID)
+	if err != nil {
+		logger.Error("Failed to check zone suspension", zap.Uint("zone_id", *schedule.ZoneID), zap.Error(err))
+		return false
+	}
+	if suspension == nil {
+		return false
+	}
+
+	scheduleID := schedule.ID
+	if err := s.suspensionService.RecordSkip(*schedule.ZoneID, suspension.ID, &scheduleID, triggerType, suspension.Reason); err != nil {
+		logger.Error("Failed to record irrigation skip", zap.Uint("zone_id", *schedule.ZoneID), zap.Error(err))
+	}
+	logger.Info("Skipping irrigation due to zone suspension",
+		zap.Uint("schedule_id", schedule.ID),
+		zap.Uint("zone_id", *schedule.ZoneID),
+		zap.String("reason", suspension.Reason))
+	return true
+}
+
 func shouldExecuteTimedSchedule(schedule models.IrrigationSchedule, now time.Time) bool {
-	if schedule.StartTime == "" {
+	if schedule.StartTime == nil || *schedule.StartTime == "" {
 		return false
 	}
 
 	nowTime := now.Format("15:04")
-	if schedule.StartTime == nowTime {
+	if *schedule.StartTime == nowTime {
 		switch schedule.RepeatMode {
 		case models.RepeatModeOnce:
 			return true
@@ -159,6 +194,23 @@ func (s *IrrigationScheduler) runDeviceHealthCheck() {
 
 	for range ticker.C {
 		s.checkDeviceHealth()
+	}
+}
+
+// runSuspensionExpiryCheck 每分钟将到达预计结束时间的停灌记录标记为解除
+func (s *IrrigationScheduler) runSuspensionExpiryCheck() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		affected, err := s.suspensionService.EndExpiredSuspensions()
+		if err != nil {
+			logger.Error("Failed to end expired suspensions", zap.Error(err))
+			continue
+		}
+		if affected > 0 {
+			logger.Info("Expired zone suspensions ended", zap.Int64("count", affected))
+		}
 	}
 }
 

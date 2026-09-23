@@ -13,13 +13,14 @@ func NewIrrigationService() *IrrigationService {
 	return &IrrigationService{}
 }
 
-func (s *IrrigationService) StartIrrigation(scheduleID *uint, zoneID *uint, triggerType models.TriggerType) (*models.IrrigationLog, error) {
+func (s *IrrigationService) StartIrrigation(scheduleID *uint, zoneID *uint, triggerType models.TriggerType, note string) (*models.IrrigationLog, error) {
 	log := &models.IrrigationLog{
 		ScheduleID:  scheduleID,
 		ZoneID:      zoneID,
 		TriggerType: triggerType,
 		StartTime:   time.Now(),
 		Status:      models.ExecutionStatusInProgress,
+		Note:        note,
 	}
 
 	if err := database.DB.Create(log).Error; err != nil {
@@ -27,6 +28,43 @@ func (s *IrrigationService) StartIrrigation(scheduleID *uint, zoneID *uint, trig
 	}
 
 	return log, nil
+}
+
+// RecordSkip 记录一次因区域停灌而被跳过的灌溉
+func (s *IrrigationService) RecordSkip(scheduleID *uint, zoneID *uint, triggerType models.TriggerType, note string) (*models.IrrigationLog, error) {
+	now := time.Now()
+	log := &models.IrrigationLog{
+		ScheduleID:  scheduleID,
+		ZoneID:      zoneID,
+		TriggerType: triggerType,
+		StartTime:   now,
+		EndTime:     &now,
+		Status:      models.ExecutionStatusSkipped,
+		Note:        note,
+	}
+
+	if err := database.DB.Create(log).Error; err != nil {
+		return nil, err
+	}
+
+	return log, nil
+}
+
+// GetRecentSkips 查询区域最近的跳过记录
+func (s *IrrigationService) GetRecentSkips(zoneID uint, limit int) ([]models.IrrigationLog, error) {
+	var logs []models.IrrigationLog
+	if limit <= 0 {
+		limit = 5
+	}
+	err := database.DB.
+		Where("zone_id = ? AND status = ?", zoneID, models.ExecutionStatusSkipped).
+		Order("start_time DESC").
+		Limit(limit).
+		Find(&logs).Error
+	if err != nil {
+		return nil, err
+	}
+	return logs, nil
 }
 
 func (s *IrrigationService) CompleteIrrigation(logID uint, success bool, waterUsage *float64, errorMsg *string) error {

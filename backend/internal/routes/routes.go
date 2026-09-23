@@ -31,11 +31,16 @@ func SetupRoutes(r *gin.Engine) {
 		zones := api.Group("/zones", middleware.JWTAuth())
 		{
 			zoneController := controllers.NewZoneController()
+			suspensionController := controllers.NewSuspensionController()
 			zones.GET("", zoneController.List)
 			zones.GET("/:id", zoneController.Get)
 			zones.POST("", zoneController.Create)
 			zones.PUT("/:id", zoneController.Update)
 			zones.DELETE("/:id", zoneController.Delete)
+			zones.PUT("/:id/suspension", suspensionController.Set)
+			zones.GET("/:id/suspension", suspensionController.GetCurrent)
+			zones.GET("/:id/suspensions", suspensionController.History)
+			zones.POST("/:id/suspension/lift", suspensionController.Lift)
 		}
 
 		devices := api.Group("/devices")

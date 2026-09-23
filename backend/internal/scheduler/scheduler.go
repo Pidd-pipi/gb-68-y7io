@@ -16,6 +16,7 @@ type IrrigationScheduler struct {
 	sensorService   *services.SensorService
 	deviceService  *services.DeviceService
 	alertService   *services.AlertService
+	suspensionService *services.SuspensionService
 }
 
 func NewIrrigationScheduler() *IrrigationScheduler {
@@ -25,6 +26,7 @@ func NewIrrigationScheduler() *IrrigationScheduler {
 		sensorService:   services.NewSensorService(),
 		deviceService:  services.NewDeviceService(),
 		alertService:   services.NewAlertService(),
+		suspensionService: services.NewSuspensionService(),
 	}
 }
 
@@ -119,6 +121,31 @@ func shouldExecuteConditionalSchedule(schedule models.IrrigationSchedule) bool {
 func (s *IrrigationScheduler) executeIrrigation(schedule models.IrrigationSchedule) {
 	logger.Info("Executing irrigation schedule", zap.Uint("schedule_id", schedule.ID))
 
+	var triggerType models.TriggerType
+	if schedule.Type == models.ScheduleTypeTimed {
+		triggerType = models.TriggerTypeTimed
+	} else {
+		triggerType = models.TriggerTypeConditional
+	}
+
+	// 区域停灌期间，定时计划和条件触发一律跳过并留下跳过记录
+	if schedule.ZoneID != nil {
+		suspension, err := s.suspensionService.GetActiveSuspension(*schedule.ZoneID)
+		if err != nil {
+			logger.Error("Failed to check zone suspension", zap.Error(err), zap.Uint("zone_id", *schedule.ZoneID))
+		} else if suspension != nil {
+			note := "区域停灌中，跳过" + triggerTypeLabel(triggerType) + "灌溉；停灌原因：" + suspension.Reason
+			if _, err := s.irrigationService.RecordSkip(&schedule.ID, schedule.ZoneID, triggerType, note); err != nil {
+				logger.Error("Failed to record skipped irrigation", zap.Error(err))
+			}
+			logger.Info("Skipping irrigation due to zone suspension",
+				zap.Uint("schedule_id", schedule.ID),
+				zap.Uint("zone_id", *schedule.ZoneID),
+				zap.String("reason", suspension.Reason))
+			return
+		}
+	}
+
 	if schedule.RainSensorID != nil {
 		rainfall, err := s.sensorService.CheckRecentRainfall(*schedule.RainSensorID, 2*time.Hour)
 		if err == nil && rainfall > 5.0 {
@@ -127,14 +154,7 @@ func (s *IrrigationScheduler) executeIrrigation(schedule models.IrrigationSchedu
 		}
 	}
 
-	var triggerType models.TriggerType
-	if schedule.Type == models.ScheduleTypeTimed {
-		triggerType = models.TriggerTypeTimed
-	} else {
-		triggerType = models.TriggerTypeConditional
-	}
-
-	log, err := s.irrigationService.StartIrrigation(&schedule.ID, schedule.ZoneID, triggerType)
+	log, err := s.irrigationService.StartIrrigation(&schedule.ID, schedule.ZoneID, triggerType, "")
 	if err != nil {
 		logger.Error("Failed to start irrigation", zap.Error(err))
 		s.alertService.CreateIrrigationFailedAlert(schedule.ZoneID, "启动灌溉失败: "+err.Error())
@@ -150,6 +170,17 @@ func (s *IrrigationScheduler) executeIrrigation(schedule models.IrrigationSchedu
 		logger.Info("Irrigation completed", zap.Uint("log_id", log.ID))
 	} else {
 		s.irrigationService.CompleteIrrigation(log.ID, false, nil, nil)
+	}
+}
+
+func triggerTypeLabel(triggerType models.TriggerType) string {
+	switch triggerType {
+	case models.TriggerTypeTimed:
+		return "定时"
+	case models.TriggerTypeConditional:
+		return "条件触发"
+	default:
+		return "手动"
 	}
 }
 

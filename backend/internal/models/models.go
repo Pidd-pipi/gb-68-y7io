@@ -112,6 +112,7 @@ const (
 	ExecutionStatusSuccess    ExecutionStatus = "success"
 	ExecutionStatusFailed     ExecutionStatus = "failed"
 	ExecutionStatusInProgress ExecutionStatus = "in_progress"
+	ExecutionStatusSkipped    ExecutionStatus = "skipped"
 )
 
 type IrrigationLog struct {
@@ -125,7 +126,29 @@ type IrrigationLog struct {
 	WaterUsage  *float64        `json:"water_usage" gorm:"type:decimal(10,2)"`
 	Status      ExecutionStatus  `json:"status" gorm:"type:execution_status;not null"`
 	ErrorMessage *string          `json:"error_message" gorm:"type:text"`
+	Note        string           `json:"note" gorm:"type:text"`
 	CreatedAt   time.Time       `json:"created_at"`
+}
+
+type SuspensionStatus string
+
+const (
+	SuspensionStatusActive SuspensionStatus = "active"
+	SuspensionStatusLifted SuspensionStatus = "lifted"
+)
+
+// IrrigationSuspension 区域临时停灌记录。
+// 同一区域同一时刻最多一条 active 记录，重复设置只更新该记录；
+// 到达预计结束时间后自动解除（状态变为 lifted），历史记录保留可查询。
+type IrrigationSuspension struct {
+	ID            uint             `json:"id" gorm:"primaryKey"`
+	ZoneID        uint             `json:"zone_id" gorm:"not null;index"`
+	Reason        string           `json:"reason" gorm:"type:text;not null"`
+	ExpectedEndAt time.Time        `json:"expected_end_at" gorm:"not null"`
+	Status        SuspensionStatus `json:"status" gorm:"type:suspension_status;default:'active'"`
+	LiftedAt      *time.Time       `json:"lifted_at"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
 }
 
 type AlertType string

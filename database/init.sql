@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS irrigation_schedules (
 
 -- 触发方式枚举
 CREATE TYPE trigger_type AS ENUM ('manual', 'timed', 'conditional');
-CREATE TYPE execution_status AS ENUM ('success', 'failed', 'in_progress');
+CREATE TYPE execution_status AS ENUM ('success', 'failed', 'in_progress', 'skipped');
 
 -- 灌溉执行记录表
 CREATE TABLE IF NOT EXISTS irrigation_logs (
@@ -81,12 +81,33 @@ CREATE TABLE IF NOT EXISTS irrigation_logs (
     water_usage DECIMAL(10, 2),
     status execution_status NOT NULL,
     error_message TEXT,
+    note TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 创建索引
 CREATE INDEX IF NOT EXISTS idx_irrigation_logs_zone_time ON irrigation_logs(zone_id, start_time);
 CREATE INDEX IF NOT EXISTS idx_irrigation_logs_time ON irrigation_logs(start_time);
+
+-- 停灌状态枚举
+CREATE TYPE suspension_status AS ENUM ('active', 'lifted');
+
+-- 区域停灌表（同一区域同一时刻最多一条 active 记录，到期自动解除，历史保留）
+CREATE TABLE IF NOT EXISTS irrigation_suspensions (
+    id BIGSERIAL PRIMARY KEY,
+    zone_id INTEGER NOT NULL REFERENCES irrigation_zones(id),
+    reason TEXT NOT NULL,
+    expected_end_at TIMESTAMP NOT NULL,
+    status suspension_status DEFAULT 'active',
+    lifted_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_irrigation_suspensions_zone ON irrigation_suspensions(zone_id, status);
+-- 保证同一区域最多一条生效中的停灌记录
+CREATE UNIQUE INDEX IF NOT EXISTS idx_irrigation_suspensions_one_active_per_zone
+    ON irrigation_suspensions(zone_id) WHERE status = 'active';
 
 -- 告警类型枚举
 CREATE TYPE alert_type AS ENUM ('device_offline', 'sensor_abnormal', 'irrigation_failed');

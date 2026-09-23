@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -13,27 +14,37 @@ import (
 
 type IrrigationController struct {
 	irrigationService *services.IrrigationService
+	suspensionService *services.SuspensionService
 }
 
 func NewIrrigationController() *IrrigationController {
 	return &IrrigationController{
 		irrigationService: services.NewIrrigationService(),
+		suspensionService: services.NewSuspensionService(),
 	}
+}
+
+// ManualIrrigationResult 手动灌溉结果
+type ManualIrrigationResult struct {
+	Skipped    bool                         `json:"skipped"`
+	Suspension *models.IrrigationSuspension `json:"suspension,omitempty"`
+	Log        *models.IrrigationLog        `json:"log,omitempty"`
 }
 
 // ManualIrrigate godoc
 // @Summary 手动灌溉
-// @Description 触发手动灌溉
+// @Description 触发手动灌溉。区域停灌期间普通手动灌溉会被跳过并留下跳过记录；紧急情况（如已断水、设备漏水）填写书面原因 emergency_reason 后可立即启动，原停灌状态仍按预计时间解除
 // @Tags 灌溉执行
 // @Security ApiKeyAuth
 // @Accept json
 // @Produce json
-// @Param zone_id body int true "区域ID"
-// @Success 200 {object} models.IrrigationLog
+// @Param request body object true "手动灌溉请求" {"zone_id": 1, "emergency_reason": "设备漏水需紧急冲管"}
+// @Success 200 {object} controllers.ManualIrrigationResult
 // @Router /api/irrigation/manual [post]
 func (c *IrrigationController) ManualIrrigate(ctx *gin.Context) {
 	var req struct {
-		ZoneID uint `json:"zone_id" binding:"required"`
+		ZoneID          uint   `json:"zone_id" binding:"required"`
+		EmergencyReason string `json:"emergency_reason"`
 	}
 
 	if err := ctx.ShouldBindJSON(&req); err != nil {
@@ -41,13 +52,52 @@ func (c *IrrigationController) ManualIrrigate(ctx *gin.Context) {
 		return
 	}
 
-	log, err := c.irrigationService.StartIrrigation(nil, &req.ZoneID, models.TriggerTypeManual)
+	suspension, err := c.suspensionService.GetActiveSuspension(req.ZoneID)
 	if err != nil {
 		response.InternalServerError(ctx, err.Error())
 		return
 	}
 
-	response.Success(ctx, log)
+	if suspension != nil {
+		emergencyReason := strings.TrimSpace(req.EmergencyReason)
+		if emergencyReason == "" {
+			// 停灌期间普通手动灌溉直接跳过，并留下跳过记录
+			note := "区域停灌中，跳过手动灌溉；停灌原因：" + suspension.Reason
+			log, err := c.irrigationService.RecordSkip(nil, &req.ZoneID, models.TriggerTypeManual, note)
+			if err != nil {
+				response.InternalServerError(ctx, err.Error())
+				return
+			}
+			response.Success(ctx, ManualIrrigationResult{
+				Skipped:    true,
+				Suspension: suspension,
+				Log:        log,
+			})
+			return
+		}
+
+		// 紧急情况：填写书面原因后立即启动，停灌状态保持至预计结束时间自动解除
+		note := "紧急启动（停灌期间），书面原因：" + emergencyReason
+		log, err := c.irrigationService.StartIrrigation(nil, &req.ZoneID, models.TriggerTypeManual, note)
+		if err != nil {
+			response.InternalServerError(ctx, err.Error())
+			return
+		}
+		response.Success(ctx, ManualIrrigationResult{
+			Skipped:    false,
+			Suspension: suspension,
+			Log:        log,
+		})
+		return
+	}
+
+	log, err := c.irrigationService.StartIrrigation(nil, &req.ZoneID, models.TriggerTypeManual, "")
+	if err != nil {
+		response.InternalServerError(ctx, err.Error())
+		return
+	}
+
+	response.Success(ctx, ManualIrrigationResult{Skipped: false, Log: log})
 }
 
 // GetIrrigationHistory godoc
